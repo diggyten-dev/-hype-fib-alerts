@@ -2,7 +2,7 @@
 4H 3% Displacement Fib Strategy - Telegram Alert Checker
 ----------------------------------------------------------
 Replicates the exact logic from the final .pine strategy and checks
-the most recently CLOSED 4H HYPEUSDT.P candle on Binance Futures.
+the most recently CLOSED 4H HYPEUSDT perpetual candle on Bybit.
 If a long or short setup qualifies, sends a Telegram message with
 entry / stop / target - the same numbers your strategy would show
 on the chart.
@@ -32,7 +32,7 @@ from datetime import datetime, timezone
 # ============================================================
 
 SYMBOL = "HYPEUSDT"
-INTERVAL = "4h"
+INTERVAL = "240"        # Bybit uses minutes: 240 = 4 hours
 MIN_MOVE_PCT = 3.0       # minMovePct
 FIB_ENTRY = 0.382        # fibEntry
 FIB_EXTENSION = 0.382    # fibExtension
@@ -41,26 +41,30 @@ VOL_MULTIPLIER = 1.5     # volMultiplier
 ATR_LEN = 14             # atrLen
 ATR_MULTIPLIER = 1.5     # atrMultiplier
 
-BINANCE_KLINES_URL = "https://fapi.binance.com/fapi/v1/klines"
+BYBIT_KLINES_URL = "https://api.bybit.com/v5/market/kline"
 STATE_FILE = os.path.join(os.path.dirname(__file__), "state.json")
 
 
 def fetch_klines(symbol, interval, limit=100):
-    """Fetch recent klines from Binance Futures public API (no key needed)."""
-    params = {"symbol": symbol, "interval": interval, "limit": limit}
-    resp = requests.get(BINANCE_KLINES_URL, params=params, timeout=15)
+    """Fetch recent klines from Bybit's public API (no key needed).
+    Binance's API blocks requests from US-hosted servers (GitHub Actions
+    runners included) with a 451 error, so we use Bybit instead - it
+    doesn't apply the same block to public, unauthenticated market data."""
+    params = {"category": "linear", "symbol": symbol, "interval": interval, "limit": limit}
+    resp = requests.get(BYBIT_KLINES_URL, params=params, timeout=15)
     resp.raise_for_status()
-    raw = resp.json()
+    data = resp.json()
+    raw = data["result"]["list"]  # Bybit returns newest-first
+    raw = list(reversed(raw))     # flip to oldest-first, matching the rest of the script
     candles = []
     for k in raw:
         candles.append({
-            "open_time": k[0],
+            "open_time": int(k[0]),
             "open": float(k[1]),
             "high": float(k[2]),
             "low": float(k[3]),
             "close": float(k[4]),
             "volume": float(k[5]),
-            "close_time": k[6],
         })
     return candles
 
