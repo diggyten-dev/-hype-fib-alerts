@@ -32,7 +32,7 @@ from datetime import datetime, timezone
 # ============================================================
 
 SYMBOL = "HYPEUSDT"
-INTERVAL = "240"        # Bybit uses minutes: 240 = 4 hours
+INTERVAL_MINUTES = 240   # 4 hours
 MIN_MOVE_PCT = 3.0       # minMovePct
 FIB_ENTRY = 0.382        # fibEntry
 FIB_EXTENSION = 0.382    # fibExtension
@@ -41,32 +41,94 @@ VOL_MULTIPLIER = 1.5     # volMultiplier
 ATR_LEN = 14             # atrLen
 ATR_MULTIPLIER = 1.5     # atrMultiplier
 
-BYBIT_KLINES_URL = "https://api.bybit.com/v5/market/kline"
 STATE_FILE = os.path.join(os.path.dirname(__file__), "state.json")
 
 
-def fetch_klines(symbol, interval, limit=100):
-    """Fetch recent klines from Bybit's public API (no key needed).
-    Binance's API blocks requests from US-hosted servers (GitHub Actions
-    runners included) with a 451 error, so we use Bybit instead - it
-    doesn't apply the same block to public, unauthenticated market data."""
-    params = {"category": "linear", "symbol": symbol, "interval": interval, "limit": limit}
-    resp = requests.get(BYBIT_KLINES_URL, params=params, timeout=15)
+def fetch_klines_okx(limit):
+    """OKX public API - HYPE-USDT-SWAP, 4H candles."""
+    url = "https://www.okx.com/api/v5/market/candles"
+    params = {"instId": "HYPE-USDT-SWAP", "bar": "4H", "limit": limit}
+    resp = requests.get(url, params=params, timeout=15)
     resp.raise_for_status()
     data = resp.json()
-    raw = data["result"]["list"]  # Bybit returns newest-first
-    raw = list(reversed(raw))     # flip to oldest-first, matching the rest of the script
-    candles = []
-    for k in raw:
-        candles.append({
+    if data.get("code") != "0":
+        raise RuntimeError(f"OKX API error: {data}")
+    raw = list(reversed(data["data"]))  # OKX returns newest-first
+    return [
+        {
             "open_time": int(k[0]),
             "open": float(k[1]),
             "high": float(k[2]),
             "low": float(k[3]),
             "close": float(k[4]),
             "volume": float(k[5]),
-        })
-    return candles
+        }
+        for k in raw
+    ]
+
+
+def fetch_klines_bybit(limit):
+    """Bybit public API - HYPEUSDT linear perpetual, 4H candles."""
+    url = "https://api.bybit.com/v5/market/kline"
+    params = {"category": "linear", "symbol": SYMBOL, "interval": str(INTERVAL_MINUTES), "limit": limit}
+    resp = requests.get(url, params=params, timeout=15)
+    resp.raise_for_status()
+    data = resp.json()
+    raw = list(reversed(data["result"]["list"]))  # Bybit returns newest-first
+    return [
+        {
+            "open_time": int(k[0]),
+            "open": float(k[1]),
+            "high": float(k[2]),
+            "low": float(k[3]),
+            "close": float(k[4]),
+            "volume": float(k[5]),
+        }
+        for k in raw
+    ]
+
+
+def fetch_klines_binance(limit):
+    """Binance Futures public API - HYPEUSDT perpetual, 4H candles."""
+    url = "https://fapi.binance.com/fapi/v1/klines"
+    params = {"symbol": SYMBOL, "interval": "4h", "limit": limit}
+    resp = requests.get(url, params=params, timeout=15)
+    resp.raise_for_status()
+    raw = resp.json()  # Binance returns oldest-first already
+    return [
+        {
+            "open_time": int(k[0]),
+            "open": float(k[1]),
+            "high": float(k[2]),
+            "low": float(k[3]),
+            "close": float(k[4]),
+            "volume": float(k[5]),
+        }
+        for k in raw
+    ]
+
+
+def fetch_klines(limit=100):
+    """Try multiple exchanges in order, since exchanges intermittently
+    block requests from cloud/CI IP ranges (GitHub Actions included).
+    Uses whichever one actually responds - self-heals if one gets
+    blocked without needing another manual fix."""
+    sources = [
+        ("OKX", fetch_klines_okx),
+        ("Bybit", fetch_klines_bybit),
+        ("Binance", fetch_klines_binance),
+    ]
+    last_error = None
+    for name, fn in sources:
+        try:
+            candles = fn(limit)
+            if candles:
+                print(f"Fetched candles from {name}.")
+                return candles
+        except Exception as e:
+            print(f"{name} failed: {e}")
+            last_error = e
+    raise RuntimeError(f"All data sources failed. Last error: {last_error}")
 
 
 def wilder_atr(candles, length):
@@ -123,7 +185,7 @@ def main():
     if not token or not chat_id:
         raise SystemExit("Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID environment variables.")
 
-    candles = fetch_klines(SYMBOL, INTERVAL, limit=max(VOL_LEN, ATR_LEN) + 10)
+    candles = fetch_klines(limit=max(VOL_LEN, ATR_LEN) + 10)
 
     # The LAST candle from Binance may still be forming (not closed yet).
     # Use the second-to-last one as "the most recently closed candle".
