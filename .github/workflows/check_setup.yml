@@ -2,9 +2,12 @@ name: Check 4H Fib Setup
 
 on:
   schedule:
-    # Runs a few minutes after every 4H candle close (UTC), so the
-    # candle is fully closed on Binance before we fetch it.
+    # Main check: 5 min AFTER each 4H candle closes (gives exchanges
+    # time to finalize the candle before we fetch it).
     - cron: "5 0,4,8,12,16,20 * * *"
+    # Heartbeat: 5 min BEFORE each 4H candle closes - just confirms
+    # the system is alive and watching, no candle logic involved.
+    - cron: "55 3,7,11,15,19,23 * * *"
   workflow_dispatch: {}   # lets you manually trigger a test run from the Actions tab
 
 jobs:
@@ -15,23 +18,37 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Python
+        if: github.event.schedule == '5 0,4,8,12,16,20 * * *' || github.event_name == 'workflow_dispatch'
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Install dependencies
+        if: github.event.schedule == '5 0,4,8,12,16,20 * * *' || github.event_name == 'workflow_dispatch'
         run: pip install requests
 
       - name: Run setup checker
+        if: github.event.schedule == '5 0,4,8,12,16,20 * * *' || github.event_name == 'workflow_dispatch'
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python check_setup.py
+        run: python telegram_alert_bot/check_setup.py
+
+      - name: Send heartbeat
+        if: github.event.schedule == '55 3,7,11,15,19,23 * * *'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TELEGRAM_CHAT_ID}" \
+            -d text="System alive. Next 4H HYPE candle closes in ~5 minutes."
 
       - name: Commit updated state file
+        if: github.event.schedule == '5 0,4,8,12,16,20 * * *' || github.event_name == 'workflow_dispatch'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add state.json
+          git add telegram_alert_bot/state.json
           git diff --quiet && git diff --staged --quiet || git commit -m "Update alert state"
           git push
