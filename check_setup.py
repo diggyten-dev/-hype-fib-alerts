@@ -35,7 +35,8 @@ SYMBOL = "HYPEUSDT"
 INTERVAL_MINUTES = 240   # 4 hours
 MIN_MOVE_PCT = 3.0       # minMovePct
 FIB_ENTRY = 0.382        # fibEntry
-FIB_EXTENSION = 0.382    # fibExtension
+FIB_EXTENSION = 0.618    # fibExtension
+ENTRY_OFFSET_PCT = 0.001 # 0.1% buffer beyond the 0.382 level, matching the .pine script
 VOL_LEN = 20             # volLen
 VOL_MULTIPLIER = 1.5     # volMultiplier
 ATR_LEN = 14             # atrLen
@@ -223,13 +224,15 @@ def main():
         print("Not enough data or zero range candle. Skipping.")
         return
 
-    bull_entry = l + candle_range * FIB_ENTRY
+    bull_382 = h - candle_range * FIB_ENTRY
+    bull_entry = bull_382 * (1 + ENTRY_OFFSET_PCT)
     bull_extension = h + candle_range * FIB_EXTENSION
-    bull_qualified = bull_move and c > bull_entry and vol_confirmed
+    bull_qualified = bull_move and c > bull_382 and vol_confirmed
 
-    bear_entry = h - candle_range * FIB_ENTRY
+    bear_382 = l + candle_range * FIB_ENTRY
+    bear_entry = bear_382 * (1 - ENTRY_OFFSET_PCT)
     bear_extension = l - candle_range * FIB_EXTENSION
-    bear_qualified = bear_move and c < bear_entry and vol_confirmed
+    bear_qualified = bear_move and c < bear_382 and vol_confirmed
 
     message = None
 
